@@ -16,6 +16,7 @@ from valutatrade_hub.core.usecases import (
     sell,
     show_portfolio,
 )
+from valutatrade_hub.infra.settings import SettingsLoader
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -29,7 +30,7 @@ def _parser() -> argparse.ArgumentParser:
 
     command = commands.add_parser("show-portfolio")
 
-    command.add_argument("--base", default="USD")
+    command.add_argument("--base", default=SettingsLoader().get("base_currency"))
 
     for name in ("buy", "sell"):
         command = commands.add_parser(name)

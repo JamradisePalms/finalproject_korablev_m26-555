@@ -4,6 +4,7 @@ import math
 from valutatrade_hub.core.currencies import get_currency
 from valutatrade_hub.core.exceptions import ApiRequestError
 from valutatrade_hub.core.models import CURRENCIES
+from valutatrade_hub.infra.settings import SettingsLoader
 
 
 def get_mock_rates() -> dict:
@@ -18,12 +19,14 @@ def get_mock_rates() -> dict:
 
 
 def load_json(filename: str):
-    with open(f"data/{filename}", encoding="utf-8") as file:
+    data_dir = SettingsLoader().get("data_dir")
+    with open(f"{data_dir}/{filename}", encoding="utf-8") as file:
         return json.load(file)
 
 
 def save_json(filename: str, records: list[dict] | dict) -> None:
-    with open(f"data/{filename}", "w", encoding="utf-8") as file:
+    data_dir = SettingsLoader().get("data_dir")
+    with open(f"{data_dir}/{filename}", "w", encoding="utf-8") as file:
         json.dump(records, file, ensure_ascii=False, indent=2, allow_nan=False)
 
 

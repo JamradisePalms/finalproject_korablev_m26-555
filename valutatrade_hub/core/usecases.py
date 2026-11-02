@@ -17,6 +17,7 @@ from valutatrade_hub.core.utils import (
     save_json,
     validate_amount,
 )
+from valutatrade_hub.infra.settings import SettingsLoader
 
 
 def register(username: str, password: str) -> None:
@@ -85,9 +86,11 @@ def login(username: str, password: str) -> str | int:
     return user["user_id"]
 
 
-def show_portfolio(user_id: str | None, base_currency: str = "USD") -> None:
+def show_portfolio(user_id: str | None, base_currency: str | None = None) -> None:
     user, _, portfolio = _get_portfolio(user_id)
 
+    if base_currency is None:
+        base_currency = SettingsLoader().get("base_currency")
     get_currency(base_currency)
 
     wallets = portfolio["wallets"]
@@ -238,10 +241,11 @@ def get_rate(from_currency: str, to_currency: str) -> None:
     except FileNotFoundError:
         rates = {}
 
+    ttl = SettingsLoader().get("rates_ttl_seconds")
     now = datetime.now().astimezone()
     try:
         updated_at = datetime.fromisoformat(rates.get("last_refresh", "")).astimezone()
-        stale = not 0 <= (now - updated_at).total_seconds() < 300
+        stale = not 0 <= (now - updated_at).total_seconds() < ttl
     except (ValueError, TypeError):
         stale = True
 
