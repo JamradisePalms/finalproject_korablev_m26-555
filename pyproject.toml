@@ -1,0 +1,28 @@
+[project]
+name = "finalproject-korablev-m26-555"
+version = "0.1.0"
+description = "Консольный валютный кошелёк с симуляцией торговли"
+readme = "README.md"
+authors = [
+    { name = "JamradisePalms", email = "denis_korablev2004@mail.ru" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "prettytable>=3.18.0",
+]
+
+[project.scripts]
+finalproject-korablev-m26-555 = "valutatrade_hub.cli.interface:main"
+
+[build-system]
+requires = ["uv_build>=0.13.4,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.3",
+]
+
+[tool.uv.build-backend]
+module-name = "valutatrade_hub"
+module-root = ""
