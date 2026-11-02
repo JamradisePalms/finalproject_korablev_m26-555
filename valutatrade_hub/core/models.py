@@ -4,6 +4,8 @@ import secrets
 from copy import deepcopy
 from datetime import datetime
 
+from valutatrade_hub.core.exceptions import InsufficientFundsError
+
 CURRENCIES = {
     "USD": 1.0,
     "EUR": 1.1,
@@ -92,7 +94,7 @@ class Wallet:
             raise ValueError("Сумма должна быть конечным положительным числом")
 
         if amount > self._balance:
-            raise ValueError("Недостаточно средств для снятия")
+            raise InsufficientFundsError(self._balance, amount, self._currency_code)
 
         self._balance -= amount
 

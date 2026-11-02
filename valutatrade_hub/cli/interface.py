@@ -1,6 +1,12 @@
 import argparse
 import shlex
 
+from valutatrade_hub.core.exceptions import (
+    ApiRequestError,
+    AuthenticationError,
+    CurrencyNotFoundError,
+    InsufficientFundsError,
+)
 from valutatrade_hub.core.usecases import (
     buy,
     deposit,
@@ -85,5 +91,11 @@ def main() -> None:
                 get_rate(args.from_currency, args.to_currency)
         except SystemExit:
             continue
+        except (InsufficientFundsError, AuthenticationError) as error:
+            print(error)
+        except CurrencyNotFoundError as error:
+            print(f"{error}. Введите get-rate --help для справки.")
+        except ApiRequestError as error:
+            print(f"{error}. Повторите позже или проверьте подключение к сети.")
         except (ValueError, TypeError, OSError, KeyError) as error:
             print(f"Ошибка: {error}")

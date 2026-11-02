@@ -1,16 +1,26 @@
 import hashlib
-import json
 import math
 import secrets
 from datetime import datetime
 
+from valutatrade_hub.core.currencies import get_currency
+from valutatrade_hub.core.exceptions import (
+    ApiRequestError,
+    AuthenticationError,
+    InsufficientFundsError,
+)
 from valutatrade_hub.core.models import Wallet
-from valutatrade_hub.core.utils import get_mock_rates
+from valutatrade_hub.core.utils import (
+    get_mock_rates,
+    get_pair_rate,
+    load_json,
+    save_json,
+    validate_amount,
+)
 
 
 def register(username: str, password: str) -> None:
-    with open("data/users.json", encoding="utf-8") as file:
-        users = json.load(file)
+    users = load_json("users.json")
 
     if any(user["username"] == username for user in users):
         raise ValueError(f"Имя пользователя '{username}' уже занято")
@@ -21,14 +31,19 @@ def register(username: str, password: str) -> None:
     if len(password) < 4:
         raise ValueError("Пароль должен быть не короче 4 символов")
 
-    with open("data/portfolios.json", encoding="utf-8") as file:
-        portfolios = json.load(file)
+    portfolios = load_json("portfolios.json")
 
-    user_id = max(
-        (item["user_id"] for item in users + portfolios
-         if isinstance(item["user_id"], int)),
-        default=0,
-    ) + 1
+    user_id = (
+        max(
+            (
+                item["user_id"]
+                for item in users + portfolios
+                if isinstance(item["user_id"], int)
+            ),
+            default=0,
+        )
+        + 1
+    )
     salt = secrets.token_hex(16)
     hashed_password = hashlib.sha256((password + salt).encode("utf-8")).hexdigest()
     users.append(
@@ -42,8 +57,8 @@ def register(username: str, password: str) -> None:
     )
     portfolios.append({"user_id": user_id, "wallets": {}})
 
-    _save_json("users.json", users)
-    _save_json("portfolios.json", portfolios)
+    save_json("users.json", users)
+    save_json("portfolios.json", portfolios)
 
     print(
         f"Пользователь {username} успешно зарегистрирован (id={user_id}). "
@@ -52,135 +67,78 @@ def register(username: str, password: str) -> None:
 
 
 def login(username: str, password: str) -> str | int:
-    with open("data/users.json", encoding="utf-8") as file:
-        users = json.load(file)
+    users = load_json("users.json")
 
     user = next((item for item in users if item["username"] == username), None)
 
     if user is None:
-        raise ValueError(f"Пользователь '{username}' не найден")
+        raise AuthenticationError(f"Пользователь '{username}' не найден")
 
     hashed_password = hashlib.sha256(
         (password + user["salt"]).encode("utf-8")
     ).hexdigest()
 
     if hashed_password != user["hashed_password"]:
-        raise ValueError("Неверный пароль")
+        raise AuthenticationError("Неверный пароль")
 
     print(f"Вы вошли как '{username}'")
     return user["user_id"]
 
 
 def show_portfolio(user_id: str | None, base_currency: str = "USD") -> None:
-    if user_id is None:
-        raise ValueError("Используйте команду login для входа в аккаунт")
+    user, _, portfolio = _get_portfolio(user_id)
 
-    with open("data/users.json", encoding="utf-8") as file:
-        users = json.load(file)
+    get_currency(base_currency)
 
-    username = next(
-        (user["username"] for user in users if user["user_id"] == user_id), None
-    )
-
-    if not username:
-        raise ValueError(f"Пользователь с id={user_id} не найден")
-
-    with open("data/portfolios.json", encoding="utf-8") as file:
-        portfolios = json.load(file)
-
-    user_portfolio = next(
-        (portfolio for portfolio in portfolios if portfolio["user_id"] == user_id), None
-    )
-    if user_portfolio is None:
-        raise ValueError(f"Портфель пользователя с id={user_id} не найден")
-
-    wallets = user_portfolio["wallets"]
+    wallets = portfolio["wallets"]
 
     if not wallets:
         print("Портфель пуст")
         return
 
-    with open("data/rates.json", encoding="utf-8") as file:
-        rates = json.load(file)
+    rates = load_json("rates.json")
 
-    if base_currency not in rates:
-        raise ValueError(f"Неизвестная валюта: {base_currency}")
+    print(f"Портфель пользователя: {user['username']} (база: {base_currency}):")
 
-    print(f"Портфель пользователя: {username} (база: {base_currency}):")
-
-    total = 0
-
-    for currency_code, wallet in wallets.items():
-        currency_amount = wallet["balance"]
-        currency_rate = (
-            1 if currency_code == base_currency else rates[currency_code][base_currency]
-        )
-
-        total += currency_amount * currency_rate
-
-        print(
-            f"- {currency_code}: {currency_amount} -> "
-            f"{currency_amount * currency_rate} {base_currency}"
-        )
+    total = 0.0
+    for code, wallet in wallets.items():
+        amount = wallet["balance"]
+        value = amount * get_pair_rate(rates, code, base_currency)
+        total += value
+        print(f"- {code}: {amount} -> {value} {base_currency}")
 
     print(f"ИТОГО: {total} {base_currency}")
+
+
+def _get_portfolio(user_id: str | None) -> tuple[dict, list[dict], dict]:
+    if user_id is None:
+        raise AuthenticationError("Используйте команду login для входа в аккаунт")
+
+    users = load_json("users.json")
+    user = next((item for item in users if item["user_id"] == user_id), None)
+
+    if user is None:
+        raise ValueError(f"Пользователь с id={user_id} не найден")
+
+    portfolios = load_json("portfolios.json")
+    portfolio = next((item for item in portfolios if item["user_id"] == user_id), None)
+
+    if portfolio is None:
+        raise ValueError(f"Портфель пользователя с id={user_id} не найден")
+
+    return user, portfolios, portfolio
 
 
 def _trade_context(
     user_id: str | None, currency_code: str, amount: float
 ) -> tuple[list[dict], dict, float, float]:
 
-    if user_id is None:
-        raise ValueError("Используйте команду login для входа в аккаунт")
+    _, portfolios, portfolio = _get_portfolio(user_id)
 
-    if (
-        not isinstance(currency_code, str)
-        or not currency_code
-        or currency_code != currency_code.strip().upper()
-    ):
-        raise ValueError("Код валюты должен быть непустой строкой в верхнем регистре")
+    validate_amount(amount)
 
-    if (
-        isinstance(amount, bool)
-        or not isinstance(amount, (int, float))
-        or not math.isfinite(amount)
-        or amount <= 0
-    ):
-        raise ValueError("'amount' должен быть конечным положительным числом")
-
-    with open("data/users.json", encoding="utf-8") as file:
-        users = json.load(file)
-
-    if not any(user["user_id"] == user_id for user in users):
-        raise ValueError(f"Пользователь с id={user_id} не найден")
-
-    with open("data/portfolios.json", encoding="utf-8") as file:
-        portfolios = json.load(file)
-
-    portfolio = next((item for item in portfolios if item["user_id"] == user_id), None)
-
-    if portfolio is None:
-        raise ValueError(f"Портфель пользователя с id={user_id} не найден")
-
-    with open("data/rates.json", encoding="utf-8") as file:
-        rates = json.load(file)
-
-    if currency_code not in rates:
-        raise ValueError(f"Неизвестная валюта: {currency_code}")
-
-    currency_rates = rates[currency_code]
-    if not isinstance(currency_rates, dict):
-        raise TypeError(f"Некорректные курсы валюты: {currency_code}")
-
-    rate = 1.0 if currency_code == "USD" else currency_rates.get("USD")
-
-    if (
-        isinstance(rate, bool)
-        or not isinstance(rate, (int, float))
-        or not math.isfinite(rate)
-        or rate <= 0
-    ):
-        raise ValueError(f"Не удалось получить курс для {currency_code}->USD")
+    rates = load_json("rates.json")
+    rate = get_pair_rate(rates, currency_code, "USD")
 
     value = amount * rate
     if not math.isfinite(value) or value <= 0:
@@ -191,14 +149,11 @@ def _trade_context(
 
 def _wallet(wallets: dict, currency_code: str) -> Wallet:
     balance = wallets.get(currency_code, {}).get("balance", 0.0)
+
     if isinstance(balance, bool) or not isinstance(balance, (int, float)):
         raise TypeError(f"Некорректный баланс кошелька {currency_code}")
+
     return Wallet(currency_code, float(balance))
-
-
-def _save_json(filename: str, records: list[dict]) -> None:
-    with open(f"data/{filename}", "w", encoding="utf-8") as file:
-        json.dump(records, file, ensure_ascii=False, indent=2, allow_nan=False)
 
 
 def buy(user_id: str | None, currency_code: str, amount: float) -> None:
@@ -212,10 +167,7 @@ def buy(user_id: str | None, currency_code: str, amount: float) -> None:
     )
 
     if cost > usd_wallet.balance:
-        raise ValueError(
-            f"Недостаточно средств: доступно {usd_wallet.balance:.2f} USD, "
-            f"требуется {cost:.2f} USD"
-        )
+        raise InsufficientFundsError(usd_wallet.balance, cost, "USD")
 
     before = currency_wallet.balance
 
@@ -230,7 +182,7 @@ def buy(user_id: str | None, currency_code: str, amount: float) -> None:
         currency_wallet.balance
     )
 
-    _save_json("portfolios.json", portfolios)
+    save_json("portfolios.json", portfolios)
 
     print(
         f"Покупка выполнена: {amount:.4f} {currency_code} "
@@ -253,10 +205,7 @@ def sell(user_id: str | None, currency_code: str, amount: float) -> None:
     usd_wallet = currency_wallet if currency_code == "USD" else _wallet(wallets, "USD")
 
     if amount > currency_wallet.balance:
-        raise ValueError(
-            f"Недостаточно средств: доступно {currency_wallet.balance:.4f} "
-            f"{currency_code}, требуется {amount:.4f} {currency_code}"
-        )
+        raise InsufficientFundsError(currency_wallet.balance, amount, currency_code)
 
     before = currency_wallet.balance
 
@@ -270,7 +219,7 @@ def sell(user_id: str | None, currency_code: str, amount: float) -> None:
     wallets[currency_code]["balance"] = currency_wallet.balance
     wallets.setdefault("USD", {"currency_code": "USD"})["balance"] = usd_wallet.balance
 
-    _save_json("portfolios.json", portfolios)
+    save_json("portfolios.json", portfolios)
 
     print(
         f"Продажа выполнена: {amount:.4f} {currency_code} "
@@ -281,102 +230,56 @@ def sell(user_id: str | None, currency_code: str, amount: float) -> None:
 
 
 def get_rate(from_currency: str, to_currency: str) -> None:
-
-    for currency in (from_currency, to_currency):
-        if (
-            not isinstance(currency, str)
-            or not currency
-            or currency != currency.strip().upper()
-        ):
-            raise ValueError("Код валюты должен быть непустой строкой в верхнем регистре")
+    get_currency(from_currency)
+    get_currency(to_currency)
 
     try:
-        with open("data/rates.json", encoding="utf-8") as file:
-            rates = json.load(file)
+        rates = load_json("rates.json")
     except FileNotFoundError:
         rates = {}
 
     now = datetime.now().astimezone()
-
     try:
         updated_at = datetime.fromisoformat(rates.get("last_refresh", "")).astimezone()
-
-        age = (now - updated_at).total_seconds()
-
-        stale = not 0 <= age < 300
-
+        stale = not 0 <= (now - updated_at).total_seconds() < 300
     except (ValueError, TypeError):
         stale = True
 
     if stale:
-        rates = get_mock_rates()
+        try:
+            rates = get_mock_rates()
+        except (OSError, ValueError) as error:
+            raise ApiRequestError(str(error)) from error
         rates["last_refresh"] = now.isoformat()
 
-    for currency in (from_currency, to_currency):
-
-        if currency not in rates or not isinstance(rates[currency], dict):
-            raise ValueError(f"Неизвестная валюта: {currency}")
-
-    rate = 1.0 if from_currency == to_currency else rates[from_currency].get(to_currency)
-
-    if (
-        isinstance(rate, bool)
-        or not isinstance(rate, (int, float))
-        or not math.isfinite(rate)
-        or rate <= 0
-    ):
-        raise ValueError(f"Курс {from_currency}->{to_currency} недоступен")
+    rate = get_pair_rate(rates, from_currency, to_currency)
 
     if stale:
-        _save_json("rates.json", rates)
+        save_json("rates.json", rates)
 
-    updated = rates["last_refresh"]
-
-    print(f"Курс {from_currency}->{to_currency}: {rate} (обновлено: {updated})")
+    print(
+        f"Курс {from_currency}->{to_currency}: {rate} "
+        f"(обновлено: {rates['last_refresh']})"
+    )
 
     if from_currency != to_currency:
-        reverse_rate = rates[to_currency].get(from_currency)
-
+        reverse = rates.get(to_currency, {}).get(from_currency)
         if (
-            not isinstance(reverse_rate, bool)
-            and isinstance(reverse_rate, (int, float))
-            and math.isfinite(reverse_rate)
-            and reverse_rate > 0
+            not isinstance(reverse, bool)
+            and isinstance(reverse, (int, float))
+            and math.isfinite(reverse)
+            and reverse > 0
         ):
-            print(f"Обратный курс {to_currency}->{from_currency}: {reverse_rate}")
+            print(f"Обратный курс {to_currency}->{from_currency}: {reverse}")
 
 
 def deposit(user_id: str | None, amount: float) -> None:
+    _, portfolios, portfolio = _get_portfolio(user_id)
 
-    if user_id is None:
-        raise ValueError("Используйте команду login для входа в аккаунт")
-
-    if (
-        isinstance(amount, bool)
-        or not isinstance(amount, (int, float))
-        or not math.isfinite(amount)
-        or amount <= 0
-    ):
-        raise ValueError("Сумма должна быть конечным положительным числом")
-
-    with open("data/users.json", encoding="utf-8") as file:
-        users = json.load(file)
-
-    if not any(user["user_id"] == user_id for user in users):
-        raise ValueError(f"Пользователь с id={user_id} не найден")
-
-    with open("data/portfolios.json", encoding="utf-8") as file:
-        portfolios = json.load(file)
-
-    portfolio = next((item for item in portfolios if item["user_id"] == user_id), None)
-
-    if portfolio is None:
-        raise ValueError(f"Портфель пользователя с id={user_id} не найден")
+    validate_amount(amount)
 
     wallets = portfolio["wallets"]
-
     usd_wallet = _wallet(wallets, "USD")
-
     usd_wallet.deposit(amount)
 
     if not math.isfinite(usd_wallet.balance):
@@ -384,6 +287,6 @@ def deposit(user_id: str | None, amount: float) -> None:
 
     wallets.setdefault("USD", {"currency_code": "USD"})["balance"] = usd_wallet.balance
 
-    _save_json("portfolios.json", portfolios)
+    save_json("portfolios.json", portfolios)
 
     print(f"Зачислено: {amount:.2f} USD. Баланс: {usd_wallet.balance:.2f} USD")
