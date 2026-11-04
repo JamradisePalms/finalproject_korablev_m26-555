@@ -22,6 +22,7 @@ class SettingsLoader:
         self._settings = {
             "data_dir": "data",
             "logs_dir": "logs",
+            "log_level": "INFO",
             "rates_ttl_seconds": 300,
             "base_currency": "USD",
             "log_format": "%(levelname)s %(asctime)s %(message)s",

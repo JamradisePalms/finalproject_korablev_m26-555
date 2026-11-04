@@ -17,6 +17,7 @@ from valutatrade_hub.core.utils import (
     save_json,
     validate_amount,
 )
+from valutatrade_hub.decorators import log_action
 from valutatrade_hub.infra.settings import SettingsLoader
 
 
@@ -159,7 +160,8 @@ def _wallet(wallets: dict, currency_code: str) -> Wallet:
     return Wallet(currency_code, float(balance))
 
 
-def buy(user_id: str | None, currency_code: str, amount: float) -> None:
+@log_action(verbose=True)
+def buy(user_id: str | None, currency_code: str, amount: float) -> dict:
     portfolios, portfolio, rate, cost = _trade_context(user_id, currency_code, amount)
 
     wallets = portfolio["wallets"]
@@ -177,6 +179,7 @@ def buy(user_id: str | None, currency_code: str, amount: float) -> None:
     if currency_code != "USD":
         usd_wallet.withdraw(cost)
         currency_wallet.deposit(amount)
+
         if not math.isfinite(currency_wallet.balance):
             raise ValueError("Баланс после покупки должен быть конечным числом")
 
@@ -193,16 +196,24 @@ def buy(user_id: str | None, currency_code: str, amount: float) -> None:
         f"- {currency_code}: было {before:.4f} -> стало {currency_wallet.balance:.4f}\n"
         f"Списано: {cost:.2f} USD"
     )
+    return {
+        "rate": rate,
+        "base": "USD",
+        "before": before,
+        "after": currency_wallet.balance,
+    }
 
 
-def sell(user_id: str | None, currency_code: str, amount: float) -> None:
+
+@log_action(verbose=True)
+def sell(user_id: str | None, currency_code: str, amount: float) -> dict:
     portfolios, portfolio, rate, proceeds = _trade_context(
         user_id, currency_code, amount
     )
 
     wallets = portfolio["wallets"]
     if currency_code not in wallets:
-        raise ValueError(f"У вас нет кошелька '{currency_code}'")
+        raise InsufficientFundsError(0.0, amount, currency_code)
 
     currency_wallet = _wallet(wallets, currency_code)
     usd_wallet = currency_wallet if currency_code == "USD" else _wallet(wallets, "USD")
@@ -230,9 +241,16 @@ def sell(user_id: str | None, currency_code: str, amount: float) -> None:
         f"- {currency_code}: было {before:.4f} -> стало {currency_wallet.balance:.4f}\n"
         f"Зачислено: {proceeds:.2f} USD"
     )
+    return {
+        "rate": rate,
+        "base": "USD",
+        "before": before,
+        "after": currency_wallet.balance,
+    }
 
 
-def get_rate(from_currency: str, to_currency: str) -> None:
+
+def get_rate(from_currency: str, to_currency: str) -> dict:
     get_currency(from_currency)
     get_currency(to_currency)
 
@@ -275,6 +293,8 @@ def get_rate(from_currency: str, to_currency: str) -> None:
             and reverse > 0
         ):
             print(f"Обратный курс {to_currency}->{from_currency}: {reverse}")
+
+    return {"rate": rate, "updated_at": rates["last_refresh"]}
 
 
 def deposit(user_id: str | None, amount: float) -> None:

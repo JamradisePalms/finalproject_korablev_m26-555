@@ -1,5 +1,6 @@
 import json
 import math
+from pathlib import Path
 
 from valutatrade_hub.core.currencies import get_currency
 from valutatrade_hub.core.exceptions import ApiRequestError
@@ -26,8 +27,16 @@ def load_json(filename: str):
 
 def save_json(filename: str, records: list[dict] | dict) -> None:
     data_dir = SettingsLoader().get("data_dir")
-    with open(f"{data_dir}/{filename}", "w", encoding="utf-8") as file:
-        json.dump(records, file, ensure_ascii=False, indent=2, allow_nan=False)
+    path = Path(data_dir) / filename
+    temporary_path = path.with_name(path.name + ".tmp")
+
+    try:
+        with temporary_path.open("w", encoding="utf-8") as file:
+            json.dump(records, file, ensure_ascii=False, indent=2, allow_nan=False)
+        temporary_path.replace(path)
+
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def validate_amount(amount: float) -> None:
