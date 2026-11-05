@@ -1,7 +1,9 @@
 .venv/
+.env
 __pycache__/
 *.py[cod]
 dist/
 .ruff_cache/
 .pytest_cache/
+.vscode/
 logs/

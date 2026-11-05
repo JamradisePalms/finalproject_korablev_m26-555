@@ -5,8 +5,8 @@ from pathlib import Path
 from valutatrade_hub.infra.settings import SettingsLoader
 
 
-def get_logger() -> logging.Logger:
-    logger = logging.getLogger("valutatrade.actions")
+def get_logger(name: str = "actions") -> logging.Logger:
+    logger = logging.getLogger(f"valutatrade.{name}")
 
     if not logger.handlers:
         settings = SettingsLoader()
@@ -15,7 +15,7 @@ def get_logger() -> logging.Logger:
         logs_dir.mkdir(parents=True, exist_ok=True)
 
         handler = RotatingFileHandler(
-            logs_dir / "actions.log",
+            logs_dir / f"{name}.log",
             maxBytes=1024 * 1024,
             backupCount=3,
             encoding="utf-8",

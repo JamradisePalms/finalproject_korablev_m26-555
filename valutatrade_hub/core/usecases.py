@@ -11,7 +11,6 @@ from valutatrade_hub.core.exceptions import (
 )
 from valutatrade_hub.core.models import Wallet
 from valutatrade_hub.core.utils import (
-    get_mock_rates,
     get_pair_rate,
     load_json,
     save_json,
@@ -19,6 +18,13 @@ from valutatrade_hub.core.utils import (
 )
 from valutatrade_hub.decorators import log_action
 from valutatrade_hub.infra.settings import SettingsLoader
+from valutatrade_hub.parser_service.api_clients import (
+    CoinGeckoClient,
+    ExchangeRateApiClient,
+)
+from valutatrade_hub.parser_service.config import ParserConfig
+from valutatrade_hub.parser_service.storage import RatesStorage
+from valutatrade_hub.parser_service.updater import RatesUpdater
 
 
 def register(username: str, password: str) -> None:
@@ -268,16 +274,22 @@ def get_rate(from_currency: str, to_currency: str) -> dict:
         stale = True
 
     if stale:
+        config = ParserConfig(
+            RATES_FILE_PATH=f"{SettingsLoader().get('data_dir')}/rates.json"
+        )
+
+        updater = RatesUpdater(
+            config,
+            [CoinGeckoClient(config), ExchangeRateApiClient(config)],
+            RatesStorage(config),
+        )
+
         try:
-            rates = get_mock_rates()
+            rates = updater.run_update()["rates"]
         except (OSError, ValueError) as error:
             raise ApiRequestError(str(error)) from error
-        rates["last_refresh"] = now.isoformat()
 
     rate = get_pair_rate(rates, from_currency, to_currency)
-
-    if stale:
-        save_json("rates.json", rates)
 
     print(
         f"Курс {from_currency}->{to_currency}: {rate} "
