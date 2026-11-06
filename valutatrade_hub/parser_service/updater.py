@@ -1,5 +1,4 @@
-import math
-from datetime import datetime
+from datetime import UTC, datetime
 
 from valutatrade_hub.core.exceptions import ApiRequestError
 from valutatrade_hub.logging_config import get_logger
@@ -23,7 +22,6 @@ class RatesUpdater:
     def run_update(self) -> dict:
         self.logger.info("Начало обновления курсов")
         quotes = {}
-        sources = []
         errors = []
 
         for client in self.clients:
@@ -37,13 +35,29 @@ class RatesUpdater:
                 if not fetched:
                     raise ApiRequestError("Источник вернул пустой список курсов")
 
+                timestamp = datetime.now(UTC).isoformat()
+
+                received = {}
+                for pair, value in fetched.items():
+                    _code, base = pair.split("_")
+
+                    if base != self.api_config.BASE_FIAT_CURRENCY:
+                        raise ApiRequestError(
+                            f"Неожиданная базовая валюта в паре {pair}"
+                        )
+
+                    received[pair] = {
+                        "rate": BaseApiClient.validate_rate(value, pair),
+                        "updated_at": timestamp,
+                        "source": name,
+                    }
+
             except ApiRequestError as error:
                 self.logger.error("Ошибка %s: %s", name, error)
                 errors.append(name)
                 continue
 
-            quotes.update(fetched)
-            sources.append(name)
+            quotes.update(received)
 
             self.logger.info("%s: получено курсов — %s", name, len(fetched))
 
@@ -51,41 +65,17 @@ class RatesUpdater:
             self.logger.error("Обновление данных отменено: ни один источник не ответил")
             raise ApiRequestError("Не удалось получить курсы ни от одного источника")
 
-        base = self.api_config.BASE_FIAT_CURRENCY
-        values = {base: 1.0}
-
-        for pair, value in quotes.items():
-
-            code, quote_base = pair.split("_")
-
-            if quote_base != base:
-                raise ApiRequestError(f"Неожиданная базовая валюта в паре {pair}")
-
-            values[code] = value
-
-        rates = {}
-        for source, source_value in values.items():
-            rates[source] = {}
-
-            for target, target_value in values.items():
-                if source == target:
-                    continue
-
-                rate = source_value / target_value
-
-                if not math.isfinite(rate) or rate <= 0:
-                    raise ApiRequestError(f"Некорректный курс {source}->{target}")
-
-                rates[source][target] = rate
-
-        rates["source"] = ", ".join(sources)
-        rates["last_refresh"] = datetime.now().astimezone().isoformat()
+        rates = {
+            "base_currency": self.api_config.BASE_FIAT_CURRENCY,
+            "last_refresh": datetime.now(UTC).isoformat(),
+            "pairs": quotes,
+        }
 
         self.logger.info("Сохранение %s полученных курсов", len(quotes))
 
         try:
-            self.storage.save_rates(rates)
-        except (OSError, ValueError) as error:
+            rates = self.storage.save_rates(rates)
+        except (OSError, ValueError, TypeError) as error:
             self.logger.error("Не удалось сохранить курсы: %s", error)
             raise
 

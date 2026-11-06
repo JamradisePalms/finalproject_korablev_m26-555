@@ -3,6 +3,8 @@ import math
 import secrets
 from datetime import datetime
 
+from prettytable import PrettyTable
+
 from valutatrade_hub.core.currencies import get_currency
 from valutatrade_hub.core.exceptions import (
     ApiRequestError,
@@ -11,7 +13,9 @@ from valutatrade_hub.core.exceptions import (
 )
 from valutatrade_hub.core.models import Wallet
 from valutatrade_hub.core.utils import (
+    get_pair_quote,
     get_pair_rate,
+    is_rate_stale,
     load_json,
     save_json,
     validate_amount,
@@ -210,7 +214,6 @@ def buy(user_id: str | None, currency_code: str, amount: float) -> dict:
     }
 
 
-
 @log_action(verbose=True)
 def sell(user_id: str | None, currency_code: str, amount: float) -> dict:
     portfolios, portfolio, rate, proceeds = _trade_context(
@@ -255,7 +258,6 @@ def sell(user_id: str | None, currency_code: str, amount: float) -> dict:
     }
 
 
-
 def get_rate(from_currency: str, to_currency: str) -> dict:
     get_currency(from_currency)
     get_currency(to_currency)
@@ -265,12 +267,10 @@ def get_rate(from_currency: str, to_currency: str) -> dict:
     except FileNotFoundError:
         rates = {}
 
-    ttl = SettingsLoader().get("rates_ttl_seconds")
-    now = datetime.now().astimezone()
     try:
-        updated_at = datetime.fromisoformat(rates.get("last_refresh", "")).astimezone()
-        stale = not 0 <= (now - updated_at).total_seconds() < ttl
-    except (ValueError, TypeError):
+        quote = get_pair_quote(rates, from_currency, to_currency)
+        stale = is_rate_stale(quote)
+    except ApiRequestError:
         stale = True
 
     if stale:
@@ -289,24 +289,19 @@ def get_rate(from_currency: str, to_currency: str) -> dict:
         except (OSError, ValueError) as error:
             raise ApiRequestError(str(error)) from error
 
-    rate = get_pair_rate(rates, from_currency, to_currency)
-
+    quote = get_pair_quote(rates, from_currency, to_currency)
+    if is_rate_stale(quote):
+        raise ApiRequestError(
+            f"Курс {from_currency}->{to_currency} устарел: источник не обновил данные"
+        )
     print(
-        f"Курс {from_currency}->{to_currency}: {rate} "
-        f"(обновлено: {rates['last_refresh']})"
+        f"Курс {from_currency}->{to_currency}: {quote['rate']} "
+        f"(обновлено: {quote['updated_at']}, источник: {quote['source']})"
     )
-
     if from_currency != to_currency:
-        reverse = rates.get(to_currency, {}).get(from_currency)
-        if (
-            not isinstance(reverse, bool)
-            and isinstance(reverse, (int, float))
-            and math.isfinite(reverse)
-            and reverse > 0
-        ):
-            print(f"Обратный курс {to_currency}->{from_currency}: {reverse}")
-
-    return {"rate": rate, "updated_at": rates["last_refresh"]}
+        reverse = get_pair_quote(rates, to_currency, from_currency)
+        print(f"Обратный курс {to_currency}->{from_currency}: {reverse['rate']}")
+    return {"rate": quote["rate"], "updated_at": quote["updated_at"]}
 
 
 def deposit(user_id: str | None, amount: float) -> None:
@@ -326,3 +321,100 @@ def deposit(user_id: str | None, amount: float) -> None:
     save_json("portfolios.json", portfolios)
 
     print(f"Зачислено: {amount:.2f} USD. Баланс: {usd_wallet.balance:.2f} USD")
+
+
+def update_rates(source: str | None = None) -> dict:
+    config = ParserConfig()
+
+    client_types = {
+        "coingecko": CoinGeckoClient,
+        "exchangerate": ExchangeRateApiClient,
+    }
+
+    if source is not None and source not in client_types:
+        raise ValueError(f"Неизвестный источник '{source}'")
+
+    selected = [client_types[source]] if source else list(client_types.values())
+
+    updater = RatesUpdater(
+        config, [client(config) for client in selected], RatesStorage(config)
+    )
+
+    result = updater.run_update()
+
+    print(
+        f"Обновлено курсов: {result['updated_count']}. "
+        f"Последнее обновление: {result['last_refresh']}"
+    )
+
+    if result["errors"]:
+        print(
+            "Обновление завершено с ошибками: "
+            + ", ".join(result["errors"])
+            + ". Подробности в logs/parser.log."
+        )
+
+    return result
+
+
+def show_rates(
+    currency: str | None = None, top: int | None = None, base: str | None = None
+) -> None:
+    if top is not None and top <= 0:
+        raise ValueError("--top должен быть положительным числом")
+    try:
+        rates = load_json("rates.json")
+    except FileNotFoundError:
+        rates = {"pairs": {}}
+    if not isinstance(rates, dict) or not isinstance(rates.get("pairs"), dict):
+        raise TypeError("Некорректный формат кеша курсов: ожидается словарь pairs")
+    pairs = rates["pairs"]
+    if not pairs:
+        print(
+            "Локальный кеш курсов пуст. Выполните 'update-rates', чтобы загрузить данные."
+        )
+        return
+    codes = {code for pair in pairs for code in pair.split("_")}
+    base = base or SettingsLoader().get("base_currency")
+    if base not in codes:
+        raise ValueError(f"Курс для '{base}' не найден в кеше")
+    if currency is not None and currency not in codes:
+        raise ValueError(f"Курс для '{currency}' не найден в кеше")
+
+    config = ParserConfig()
+    rows = []
+    for code in codes:
+        if currency is not None and code != currency:
+            continue
+        if top is not None and code not in config.CRYPTO_CURRENCIES:
+            continue
+        if code == base and currency is None:
+            continue
+        quote = get_pair_quote(rates, code, base)
+        rows.append((code, quote))
+    rows.sort(
+        key=lambda row: row[1]["rate"] if top is not None else row[0],
+        reverse=top is not None,
+    )
+    if top is not None:
+        rows = rows[:top]
+    if not rows:
+        print("Курсы по заданным фильтрам не найдены в кеше.")
+        return
+    print(
+        f"Курсы из кеша (последнее обновление: {rates.get('last_refresh', 'неизвестно')}):"
+    )
+    if any(is_rate_stale(quote) for _, quote in rows):
+        print("Внимание: есть устаревшие курсы. Выполните update-rates.")
+    table = PrettyTable(["Пара", "Курс", "Обновлено", "Источник"])
+    table.align = "l"
+    for code, quote in rows:
+        table.add_row(
+            [
+                f"{code}_{base}",
+                f"{quote['rate']:.10g}",
+                quote["updated_at"],
+                quote["source"],
+            ]
+        )
+    print(table)

@@ -18,6 +18,11 @@ show-portfolio --base USD
 buy --currency BTC --amount 0.05
 sell --currency BTC --amount 0.01
 get-rate --from USD --to BTC
+update-rates
+update-rates --source coingecko
+show-rates
+show-rates --currency RUB
+show-rates --top 2 --base EUR
 help
 buy --help
 exit
@@ -43,3 +48,14 @@ USD-баланса. Курсы берутся из локального `data/ra
 `logs_dir`, `log_level` и `log_format` задаются в `[tool.valutatrade]`.
 `@log_action(verbose=True)` добавляет баланс до и после операции.
 Ошибка записывается в лог и передаётся дальше в CLI.
+
+`update-rates` получает курсы от обоих API. Флаг `--source` выбирает один источник;
+в этом случае обновляются только его пары, остальные котировки сохраняются.
+При частичном отказе обновляются доступные котировки, остальные сохраняют прежнее время;
+выводится предупреждение.
+Если все выбранные источники недоступны, прежний файл остаётся без изменений.
+Подробности обновления записываются в `logs/parser.log`.
+
+`show-rates` читает локальный кеш без обращения к API. `--currency` фильтрует валюту,
+`--top` выбирает самые дорогие криптовалюты, `--base` задаёт валюту отображения.
+Для обеих команд вход в аккаунт не требуется.

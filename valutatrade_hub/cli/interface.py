@@ -15,6 +15,8 @@ from valutatrade_hub.core.usecases import (
     register,
     sell,
     show_portfolio,
+    show_rates,
+    update_rates,
 )
 from valutatrade_hub.infra.settings import SettingsLoader
 
@@ -44,6 +46,14 @@ def _parser() -> argparse.ArgumentParser:
 
     command.add_argument("--from", dest="from_currency", required=True)
     command.add_argument("--to", dest="to_currency", required=True)
+
+    command = commands.add_parser("update-rates")
+    command.add_argument("--source", choices=("coingecko", "exchangerate"))
+
+    command = commands.add_parser("show-rates")
+    command.add_argument("--currency", type=str.upper)
+    command.add_argument("--top", type=int)
+    command.add_argument("--base", type=str.upper)
 
     commands.add_parser("help")
     commands.add_parser("exit")
@@ -90,6 +100,10 @@ def main() -> None:
                 deposit(current_user_id, args.amount)
             elif args.command == "get-rate":
                 get_rate(args.from_currency, args.to_currency)
+            elif args.command == "update-rates":
+                update_rates(args.source)
+            elif args.command == "show-rates":
+                show_rates(args.currency, args.top, args.base)
         except SystemExit:
             continue
         except (InsufficientFundsError, AuthenticationError) as error:

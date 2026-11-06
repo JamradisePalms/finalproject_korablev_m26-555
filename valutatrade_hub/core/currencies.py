@@ -64,13 +64,16 @@ class CryptoCurrency(Currency):
 _CURRENCIES = {
     "USD": FiatCurrency("US Dollar", "USD", "United States"),
     "EUR": FiatCurrency("Euro", "EUR", "Eurozone"),
+    "GBP": FiatCurrency("Pound Sterling", "GBP", "United Kingdom"),
     "RUB": FiatCurrency("Russian Ruble", "RUB", "Russia"),
     "BTC": CryptoCurrency("Bitcoin", "BTC", "SHA-256", 1.12e12),
     "ETH": CryptoCurrency("Ethereum", "ETH", "Ethash", 0.0),
+    "SOL": CryptoCurrency("Solana", "SOL", "PoS", 0.0),
 }
 
 
 def get_currency(code: str) -> Currency:
     if not isinstance(code, str) or code not in _CURRENCIES:
         raise CurrencyNotFoundError(code)
+
     return _CURRENCIES[code]

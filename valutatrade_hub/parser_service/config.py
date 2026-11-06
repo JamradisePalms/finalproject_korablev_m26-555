@@ -10,6 +10,7 @@ load_dotenv()
 
 settings = SettingsLoader()
 
+
 @dataclass
 class ParserConfig:
     EXCHANGE_RATE_API_KEY: str | None = field(
@@ -32,5 +33,5 @@ class ParserConfig:
     )
 
     REQUEST_TIMEOUT: int = 10
-    RATES_FILE_PATH: str = f"{settings.get('data_dir'), "data"}/rates.json"
-    HISTORY_FILE_PATH: str = f"{settings.get('data_dir'), "data"}/exchange_rates.json"
+    RATES_FILE_PATH: str = f"{settings.get('data_dir', 'data')}/rates.json"
+    HISTORY_FILE_PATH: str = f"{settings.get('data_dir', 'data')}/exchange_rates.json"
