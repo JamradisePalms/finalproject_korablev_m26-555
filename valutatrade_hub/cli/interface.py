@@ -7,6 +7,7 @@ from valutatrade_hub.core.exceptions import (
     CurrencyNotFoundError,
     InsufficientFundsError,
 )
+from valutatrade_hub.core.models import User
 from valutatrade_hub.core.usecases import (
     buy,
     deposit,
@@ -64,7 +65,7 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = _parser()
 
-    current_user_id = None
+    current_user: User | None = None
 
     print("Валютный кошелёк. Введите help для списка команд, exit для выхода.")
 
@@ -89,15 +90,15 @@ def main() -> None:
             elif args.command == "register":
                 register(args.username, args.password)
             elif args.command == "login":
-                current_user_id = login(args.username, args.password)
+                current_user = login(args.username, args.password)
             elif args.command == "show-portfolio":
-                show_portfolio(current_user_id, args.base)
+                show_portfolio(current_user, args.base)
             elif args.command == "buy":
-                buy(current_user_id, args.currency, args.amount)
+                buy(current_user, args.currency, args.amount)
             elif args.command == "sell":
-                sell(current_user_id, args.currency, args.amount)
+                sell(current_user, args.currency, args.amount)
             elif args.command == "deposit":
-                deposit(current_user_id, args.amount)
+                deposit(current_user, args.amount)
             elif args.command == "get-rate":
                 get_rate(args.from_currency, args.to_currency)
             elif args.command == "update-rates":

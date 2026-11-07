@@ -1,6 +1,6 @@
 [
     {
-      "user_id": "abc",
+      "user_id": 1,
       "username": "alice",
       "hashed_password": "3e2a19...",
       "salt": "x5T9!",

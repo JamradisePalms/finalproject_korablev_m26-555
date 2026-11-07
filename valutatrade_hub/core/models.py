@@ -10,12 +10,26 @@ from valutatrade_hub.core.utils import get_pair_rate
 
 
 class User:
-    def __init__(self, user_id: int, username: str, hashed_password: str, salt: str, registration_date: datetime):
+    def __init__(
+        self,
+        user_id: int,
+        username: str,
+        hashed_password: str,
+        salt: str,
+        registration_date: datetime,
+    ):
         self._user_id = user_id
         self.username = username
         self._hashed_password = hashed_password
         self._registration_date = registration_date
         self._salt = salt
+
+    @classmethod
+    def create(cls, user_id: int, username: str, password: str) -> "User":
+        """Создаёт пользователя и подготавливает данные для хранения пароля."""
+        user = cls(user_id, username, "", "", datetime.now())
+        user._set_password(password)
+        return user
 
     @property
     def user_id(self) -> int:
@@ -41,7 +55,7 @@ class User:
     def username(self, new_username: str) -> None:
         """Задаёт непустое имя пользователя."""
         if not new_username.strip():
-            raise ValueError("Username cannot be empty")
+            raise ValueError("Имя пользователя не может быть пустым")
 
         self._username = new_username
 
@@ -51,16 +65,24 @@ class User:
 
     def change_password(self, new_password: str) -> None:
         """Заменяет текущий пароль на новый."""
-        if len(new_password) < 4:
-            raise ValueError("Password must be at least 4 characters long")
-
-        self._salt = secrets.token_hex(16)
-        self._hashed_password = hashlib.sha256((new_password + self._salt).encode("utf-8")).hexdigest()
+        self._set_password(new_password)
         print(f"Password changed for user {self._username}")
 
     def verify_password(self, password: str) -> bool:
-        """Сравнивает переданный пароль с сохранённым."""
-        return hashlib.sha256((password + self._salt).encode("utf-8")).hexdigest() == self._hashed_password
+        """Сравнивает хеш введённого пароля с сохранённым."""
+        return self._hash_password(password, self._salt) == self._hashed_password
+
+    def _set_password(self, password: str) -> None:
+        if len(password) < 4:
+            raise ValueError("Пароль должен быть не короче 4 символов")
+
+        salt = secrets.token_hex(16)
+        self._hashed_password = self._hash_password(password, salt)
+        self._salt = salt
+
+    @staticmethod
+    def _hash_password(password: str, salt: str) -> str:
+        return hashlib.sha256((password + salt).encode("utf-8")).hexdigest()
 
 
 class Wallet:

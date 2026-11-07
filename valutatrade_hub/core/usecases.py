@@ -1,6 +1,4 @@
-import hashlib
 import math
-import secrets
 from datetime import datetime
 
 from prettytable import PrettyTable
@@ -11,7 +9,7 @@ from valutatrade_hub.core.exceptions import (
     AuthenticationError,
     InsufficientFundsError,
 )
-from valutatrade_hub.core.models import Wallet
+from valutatrade_hub.core.models import Portfolio, User, Wallet
 from valutatrade_hub.core.utils import (
     get_pair_quote,
     get_pair_rate,
@@ -38,37 +36,20 @@ def register(username: str, password: str) -> None:
     if any(user["username"] == username for user in users):
         raise ValueError(f"Имя пользователя '{username}' уже занято")
 
-    if not username.strip():
-        raise ValueError("Имя пользователя не может быть пустым")
-
-    if len(password) < 4:
-        raise ValueError("Пароль должен быть не короче 4 символов")
-
     portfolios = load_json("portfolios.json")
 
-    user_id = (
-        max(
-            (
-                item["user_id"]
-                for item in users + portfolios
-                if isinstance(item["user_id"], int)
-            ),
-            default=0,
-        )
-        + 1
-    )
-    salt = secrets.token_hex(16)
-    hashed_password = hashlib.sha256((password + salt).encode("utf-8")).hexdigest()
+    user_id = max((item["user_id"] for item in users + portfolios), default=0) + 1
+    user = User.create(user_id, username, password)
     users.append(
         {
-            "username": username,
-            "hashed_password": hashed_password,
-            "salt": salt,
-            "user_id": user_id,
-            "registration_date": datetime.now().isoformat(),
+            "username": user.username,
+            "hashed_password": user.hashed_password,
+            "salt": user.salt,
+            "user_id": user.user_id,
+            "registration_date": user.registration_date.isoformat(),
         }
     )
-    portfolios.append({"user_id": user_id, "wallets": {}})
+    portfolios.append({"user_id": user.user_id, "wallets": {}})
 
     save_json("users.json", users)
     save_json("portfolios.json", portfolios)
@@ -79,64 +60,65 @@ def register(username: str, password: str) -> None:
     )
 
 
-def login(username: str, password: str) -> str | int:
-    """Проверяет пароль и возвращает идентификатор пользователя."""
+def user_from_record(record: dict) -> User:
+    return User(
+        user_id=record["user_id"],
+        username=record["username"],
+        hashed_password=record["hashed_password"],
+        salt=record["salt"],
+        registration_date=datetime.fromisoformat(record["registration_date"]),
+    )
+
+
+def login(username: str, password: str) -> User:
+    """Проверяет пароль и возвращает пользователя для текущего сеанса."""
     users = load_json("users.json")
 
-    user = next((item for item in users if item["username"] == username), None)
-
-    if user is None:
+    record = next((item for item in users if item["username"] == username), None)
+    if record is None:
         raise AuthenticationError(f"Пользователь '{username}' не найден")
 
-    hashed_password = hashlib.sha256(
-        (password + user["salt"]).encode("utf-8")
-    ).hexdigest()
-
-    if hashed_password != user["hashed_password"]:
+    user = user_from_record(record)
+    if not user.verify_password(password):
         raise AuthenticationError("Неверный пароль")
 
-    print(f"Вы вошли как '{username}'")
-    return user["user_id"]
+    print(f"Вы вошли как '{user.username}'")
+    return user
 
 
-def show_portfolio(user_id: str | None, base_currency: str | None = None) -> None:
+def show_portfolio(user: User | None, base_currency: str | None = None) -> None:
     """Выводит кошельки и общую стоимость в выбранной валюте."""
-    user, _, portfolio = _get_portfolio(user_id)
+    user, _, portfolio_record = _get_portfolio(user)
 
     if base_currency is None:
         base_currency = SettingsLoader().get("base_currency")
     get_currency(base_currency)
 
-    wallets = portfolio["wallets"]
-
-    if not wallets:
+    wallet_records = portfolio_record["wallets"]
+    if not wallet_records:
         print("Портфель пуст")
         return
 
+    wallets = {code: _wallet(wallet_records, code) for code in wallet_records}
+    portfolio = Portfolio(user, wallets)
+
     rates = load_json("rates.json")
+    total = portfolio.get_total_value(rates, base_currency)
 
-    print(f"Портфель пользователя: {user['username']} (база: {base_currency}):")
-
-    total = 0.0
+    print(f"Портфель пользователя: {portfolio.user.username} (база: {base_currency}):")
     for code, wallet in wallets.items():
-        amount = wallet["balance"]
+        amount = wallet.balance
         value = amount * get_pair_rate(rates, code, base_currency)
-        total += value
         print(f"- {code}: {amount} -> {value} {base_currency}")
 
     print(f"ИТОГО: {total} {base_currency}")
 
 
-def _get_portfolio(user_id: str | None) -> tuple[dict, list[dict], dict]:
-    if user_id is None:
+def _get_portfolio(user: User | None) -> tuple[User, list[dict], dict]:
+    if user is None:
         raise AuthenticationError("Используйте команду login для входа в аккаунт")
 
-    users = load_json("users.json")
-    user = next((item for item in users if item["user_id"] == user_id), None)
-
-    if user is None:
-        raise ValueError(f"Пользователь с id={user_id} не найден")
-
+    user_id = user.user_id
     portfolios = load_json("portfolios.json")
     portfolio = next((item for item in portfolios if item["user_id"] == user_id), None)
 
@@ -147,10 +129,10 @@ def _get_portfolio(user_id: str | None) -> tuple[dict, list[dict], dict]:
 
 
 def _trade_context(
-    user_id: str | None, currency_code: str, amount: float
+    user: User | None, currency_code: str, amount: float
 ) -> tuple[list[dict], dict, float, float]:
 
-    _, portfolios, portfolio = _get_portfolio(user_id)
+    _, portfolios, portfolio = _get_portfolio(user)
 
     validate_amount(amount)
 
@@ -183,9 +165,9 @@ def _wallet(wallets: dict, currency_code: str) -> Wallet:
 
 
 @log_action(verbose=True)
-def buy(user_id: str | None, currency_code: str, amount: float) -> dict:
+def buy(user: User | None, currency_code: str, amount: float) -> dict:
     """Покупает валюту за USD по свежей котировке из кеша."""
-    portfolios, portfolio, rate, cost = _trade_context(user_id, currency_code, amount)
+    portfolios, portfolio, rate, cost = _trade_context(user, currency_code, amount)
 
     wallets = portfolio["wallets"]
     usd_wallet = _wallet(wallets, "USD")
@@ -228,11 +210,9 @@ def buy(user_id: str | None, currency_code: str, amount: float) -> dict:
 
 
 @log_action(verbose=True)
-def sell(user_id: str | None, currency_code: str, amount: float) -> dict:
+def sell(user: User | None, currency_code: str, amount: float) -> dict:
     """Продаёт валюту за USD по свежей котировке из кеша."""
-    portfolios, portfolio, rate, proceeds = _trade_context(
-        user_id, currency_code, amount
-    )
+    portfolios, portfolio, rate, proceeds = _trade_context(user, currency_code, amount)
 
     wallets = portfolio["wallets"]
     if currency_code not in wallets:
@@ -319,9 +299,9 @@ def get_rate(from_currency: str, to_currency: str) -> dict:
     return {"rate": quote["rate"], "updated_at": quote["updated_at"]}
 
 
-def deposit(user_id: str | None, amount: float) -> None:
+def deposit(user: User | None, amount: float) -> None:
     """Пополняет USD-кошелёк для симуляции торговли."""
-    _, portfolios, portfolio = _get_portfolio(user_id)
+    _, portfolios, portfolio = _get_portfolio(user)
 
     validate_amount(amount)
 
