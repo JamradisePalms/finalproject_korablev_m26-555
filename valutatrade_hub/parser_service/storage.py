@@ -2,6 +2,10 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from valutatrade_hub.core.exceptions import ApiRequestError
+from valutatrade_hub.core.utils import validate_quote
+from valutatrade_hub.infra.database import write_json
+from valutatrade_hub.logging_config import get_logger
 from valutatrade_hub.parser_service.config import ParserConfig
 
 
@@ -14,11 +18,26 @@ class RatesStorage:
         try:
             with self.path.open(encoding="utf-8") as file:
                 rates = json.load(file)
+
+            if not isinstance(rates, dict) or not isinstance(rates.get("pairs"), dict):
+                raise TypeError("Ожидается словарь pairs")
+
+            last_refresh = rates.get("last_refresh")
+            if (
+                last_refresh is not None
+                and datetime.fromisoformat(last_refresh).tzinfo is None
+            ):
+                raise ValueError("В last_refresh не задан часовой пояс")
+
+            for pair, quote in rates["pairs"].items():
+                from_code, to_code = pair.split("_")
+                validate_quote(quote, from_code, to_code)
+
         except FileNotFoundError:
             return {"pairs": {}}
-
-        if not isinstance(rates, dict) or not isinstance(rates.get("pairs"), dict):
-            raise TypeError("Некорректный формат кеша: ожидается словарь pairs")
+        except (ApiRequestError, TypeError, ValueError, OverflowError) as error:
+            get_logger("parser").warning("Кеш курсов повреждён: %s", error)
+            return {"pairs": {}}
 
         return rates
 
@@ -80,20 +99,7 @@ class RatesStorage:
             )
             known_ids.add(record_id)
 
-        self._write_json(self.history_path, history)
-        self._write_json(self.path, merged)
+        write_json(self.history_path, history)
+        write_json(self.path, merged)
 
         return merged
-
-    @staticmethod
-    def _write_json(path: Path, data: dict | list) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path = path.with_name(path.name + ".tmp")
-
-        try:
-            with temporary_path.open("w", encoding="utf-8") as file:
-                json.dump(data, file, ensure_ascii=False, indent=2, allow_nan=False)
-
-            temporary_path.replace(path)
-        finally:
-            temporary_path.unlink(missing_ok=True)

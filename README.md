@@ -114,3 +114,7 @@ USD-баланса. Курсы берутся из локального `data/ra
 
 Кеш содержит `base_currency`, `last_refresh` и словарь `pairs`; у каждой котировки
 есть `rate`, `updated_at` и `source`.
+
+# Демо asciinema
+
+[![asciicast](https://asciinema.org/a/FA4W53r75FB9HC3d.svg)](https://asciinema.org/a/FA4W53r75FB9HC3d)

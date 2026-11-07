@@ -6,7 +6,7 @@ from datetime import datetime
 
 from valutatrade_hub.core.currencies import get_currency
 from valutatrade_hub.core.exceptions import InsufficientFundsError
-from valutatrade_hub.core.utils import get_pair_rate
+from valutatrade_hub.core.utils import get_pair_rate, validate_amount
 
 
 class User:
@@ -100,33 +100,36 @@ class Wallet:
 
     @balance.setter
     def balance(self, new_balance: float) -> None:
-        if not isinstance(new_balance, float):
+        if isinstance(new_balance, bool) or not isinstance(new_balance, (int, float)):
             raise TypeError("Баланс должен быть числом")
 
-        if not math.isfinite(new_balance) or new_balance < 0:
+        try:
+            balance = float(new_balance)
+        except OverflowError as error:
+            raise ValueError("Баланс выходит за допустимый диапазон") from error
+
+        if not math.isfinite(balance) or balance < 0:
             raise ValueError("Баланс должен быть конечным неотрицательным числом")
 
-        self._balance = new_balance
+        self._balance = balance
 
     def deposit(self, amount: float) -> None:
         """Увеличивает баланс на положительную конечную сумму."""
-        if not math.isfinite(amount) or amount <= 0:
-            raise ValueError("Сумма должна быть конечным положительным числом")
-
-        self._balance += amount
+        validate_amount(amount)
+        self.balance += amount
 
     def withdraw(self, amount: float) -> None:
         """Списывает сумму, проверяя достаточность средств."""
-        if not math.isfinite(amount) or amount <= 0:
-            raise ValueError("Сумма должна быть конечным положительным числом")
+        validate_amount(amount)
 
         if amount > self._balance:
             raise InsufficientFundsError(self._balance, amount, self._currency_code)
 
         self._balance -= amount
 
-    def get_balance_info(self) -> float:
-        return self._balance
+    def get_balance_info(self) -> str:
+        """Возвращает баланс вместе с кодом валюты."""
+        return f"{self.balance} {self.currency_code}"
 
 
 class Portfolio:
@@ -159,13 +162,24 @@ class Portfolio:
 
     def get_total_value(self, rates: dict, base_currency: str = "USD") -> float:
         """Возвращает текущую стоимость портфеля."""
+        _, total_value = self.get_valuation(rates, base_currency)
+        return total_value
+
+    def get_valuation(
+        self, rates: dict, base_currency: str = "USD"
+    ) -> tuple[list[tuple[str, float, float]], float]:
+        """Возвращает оценку каждого кошелька и общую стоимость портфеля."""
         get_currency(base_currency)
 
+        rows = []
         total_value = 0.0
         for code, wallet in self._wallets.items():
-            total_value += wallet.balance * get_pair_rate(rates, code, base_currency)
+            amount = wallet.balance
+            value = amount * get_pair_rate(rates, code, base_currency)
+            rows.append((code, amount, value))
+            total_value += value
 
         if not math.isfinite(total_value):
             raise ValueError("Стоимость портфеля должна быть конечным числом")
 
-        return total_value
+        return rows, total_value

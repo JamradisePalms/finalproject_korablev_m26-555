@@ -5,33 +5,8 @@ from pathlib import Path
 
 from valutatrade_hub.core.currencies import get_currency
 from valutatrade_hub.core.exceptions import ApiRequestError
+from valutatrade_hub.infra.database import write_json
 from valutatrade_hub.infra.settings import SettingsLoader
-
-MOCK_USD_RATES = {
-    "USD": 1.0,
-    "EUR": 1.1,
-    "RUB": 0.01,
-    "BTC": 1000.0,
-    "ETH": 2000.0,
-}
-
-
-def get_mock_rates() -> dict:
-    """Создаёт мок котировки к USD без запросов к API."""
-    timestamp = datetime.now(UTC).isoformat()
-    return {
-        "base_currency": "USD",
-        "last_refresh": timestamp,
-        "pairs": {
-            f"{code}_USD": {
-                "rate": value / MOCK_USD_RATES["USD"],
-                "updated_at": timestamp,
-                "source": "Mock",
-            }
-            for code, value in MOCK_USD_RATES.items()
-            if code != "USD"
-        },
-    }
 
 
 def load_json(filename: str):
@@ -44,16 +19,7 @@ def load_json(filename: str):
 def save_json(filename: str, records: list[dict] | dict) -> None:
     """Безопасно сохраняет JSON."""
     data_dir = SettingsLoader().get("data_dir")
-    path = Path(data_dir) / filename
-    temporary_path = path.with_name(path.name + ".tmp")
-
-    try:
-        with temporary_path.open("w", encoding="utf-8") as file:
-            json.dump(records, file, ensure_ascii=False, indent=2, allow_nan=False)
-        temporary_path.replace(path)
-
-    finally:
-        temporary_path.unlink(missing_ok=True)
+    write_json(Path(data_dir) / filename, records)
 
 
 def validate_amount(amount: float) -> None:
@@ -83,10 +49,7 @@ def get_pair_quote(rates: dict, from_code: str, to_code: str) -> dict:
     direct = pairs.get(f"{from_code}_{to_code}")
     reverse = pairs.get(f"{to_code}_{from_code}")
     if direct is not None:
-        if not isinstance(direct, dict):
-            raise ApiRequestError(f"Некорректная котировка {from_code}->{to_code}")
-
-        quote = dict(direct)
+        quote = direct
     elif reverse is not None:
         original = get_pair_quote(rates, to_code, from_code)
 
@@ -108,6 +71,14 @@ def get_pair_quote(rates: dict, from_code: str, to_code: str) -> dict:
             ).isoformat(),
             "source": ", ".join(dict.fromkeys([source["source"], target["source"]])),
         }
+
+    return validate_quote(quote, from_code, to_code)
+
+
+def validate_quote(quote: dict, from_code: str, to_code: str) -> dict:
+    """Проверяет котировку и возвращает её нормализованные поля."""
+    if not isinstance(quote, dict):
+        raise ApiRequestError(f"Некорректная котировка {from_code}->{to_code}")
 
     rate = quote.get("rate")
 

@@ -1,3 +1,4 @@
+import json
 import math
 from datetime import datetime
 
@@ -12,7 +13,6 @@ from valutatrade_hub.core.exceptions import (
 from valutatrade_hub.core.models import Portfolio, User, Wallet
 from valutatrade_hub.core.utils import (
     get_pair_quote,
-    get_pair_rate,
     is_rate_stale,
     load_json,
     save_json,
@@ -49,10 +49,18 @@ def register(username: str, password: str) -> None:
             "registration_date": user.registration_date.isoformat(),
         }
     )
-    portfolios.append({"user_id": user.user_id, "wallets": {}})
 
-    save_json("users.json", users)
-    save_json("portfolios.json", portfolios)
+    portfolio = {"user_id": user.user_id, "wallets": {}}
+    save_json("portfolios.json", [*portfolios, portfolio])
+
+    try:
+        save_json("users.json", users)
+    except (OSError, TypeError, ValueError) as error:
+        try:
+            save_json("portfolios.json", portfolios)
+        except OSError as rollback_error:
+            raise error from rollback_error
+        raise
 
     print(
         f"Пользователь {username} успешно зарегистрирован (id={user_id}). "
@@ -103,12 +111,10 @@ def show_portfolio(user: User | None, base_currency: str | None = None) -> None:
     portfolio = Portfolio(user, wallets)
 
     rates = load_json("rates.json")
-    total = portfolio.get_total_value(rates, base_currency)
+    rows, total = portfolio.get_valuation(rates, base_currency)
 
     print(f"Портфель пользователя: {portfolio.user.username} (база: {base_currency}):")
-    for code, wallet in wallets.items():
-        amount = wallet.balance
-        value = amount * get_pair_rate(rates, code, base_currency)
+    for code, amount, value in rows:
         print(f"- {code}: {amount} -> {value} {base_currency}")
 
     print(f"ИТОГО: {total} {base_currency}")
@@ -137,6 +143,11 @@ def _trade_context(
     validate_amount(amount)
 
     get_currency(currency_code)
+    if currency_code == "USD":
+        raise ValueError(
+            "USD используется для расчётов. Выберите другую валюту для обмена"
+        )
+
     rates = load_json("rates.json")
 
     quote = get_pair_quote(rates, currency_code, "USD")
@@ -172,21 +183,11 @@ def buy(user: User | None, currency_code: str, amount: float) -> dict:
     wallets = portfolio["wallets"]
     usd_wallet = _wallet(wallets, "USD")
 
-    currency_wallet = (
-        usd_wallet if currency_code == "USD" else _wallet(wallets, currency_code)
-    )
-
-    if cost > usd_wallet.balance:
-        raise InsufficientFundsError(usd_wallet.balance, cost, "USD")
-
+    currency_wallet = _wallet(wallets, currency_code)
     before = currency_wallet.balance
 
-    if currency_code != "USD":
-        usd_wallet.withdraw(cost)
-        currency_wallet.deposit(amount)
-
-        if not math.isfinite(currency_wallet.balance):
-            raise ValueError("Баланс после покупки должен быть конечным числом")
+    usd_wallet.withdraw(cost)
+    currency_wallet.deposit(amount)
 
     wallets.setdefault("USD", {"currency_code": "USD"})["balance"] = usd_wallet.balance
     wallets.setdefault(currency_code, {"currency_code": currency_code})["balance"] = (
@@ -219,19 +220,11 @@ def sell(user: User | None, currency_code: str, amount: float) -> dict:
         raise InsufficientFundsError(0.0, amount, currency_code)
 
     currency_wallet = _wallet(wallets, currency_code)
-    usd_wallet = currency_wallet if currency_code == "USD" else _wallet(wallets, "USD")
-
-    if amount > currency_wallet.balance:
-        raise InsufficientFundsError(currency_wallet.balance, amount, currency_code)
-
+    usd_wallet = _wallet(wallets, "USD")
     before = currency_wallet.balance
 
-    if currency_code != "USD":
-        currency_wallet.withdraw(amount)
-        usd_wallet.deposit(proceeds)
-
-        if not math.isfinite(usd_wallet.balance):
-            raise ValueError("Баланс после продажи должен быть конечным числом")
+    currency_wallet.withdraw(amount)
+    usd_wallet.deposit(proceeds)
 
     wallets[currency_code]["balance"] = currency_wallet.balance
     wallets.setdefault("USD", {"currency_code": "USD"})["balance"] = usd_wallet.balance
@@ -259,36 +252,26 @@ def get_rate(from_currency: str, to_currency: str) -> dict:
 
     try:
         rates = load_json("rates.json")
-    except FileNotFoundError:
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
         rates = {}
 
     try:
         quote = get_pair_quote(rates, from_currency, to_currency)
-        stale = is_rate_stale(quote)
-    except ApiRequestError:
-        stale = True
+    except (ApiRequestError, OverflowError):
+        quote = None
 
-    if stale:
-        config = ParserConfig(
-            RATES_FILE_PATH=f"{SettingsLoader().get('data_dir')}/rates.json"
-        )
-
-        updater = RatesUpdater(
-            config,
-            [CoinGeckoClient(config), ExchangeRateApiClient(config)],
-            RatesStorage(config),
-        )
-
+    if quote is None or is_rate_stale(quote):
         try:
-            rates = updater.run_update()["rates"]
+            rates = _run_rates_update()["rates"]
         except (OSError, ValueError) as error:
             raise ApiRequestError(str(error)) from error
 
-    quote = get_pair_quote(rates, from_currency, to_currency)
-    if is_rate_stale(quote):
-        raise ApiRequestError(
-            f"Курс {from_currency}->{to_currency} устарел: источник не обновил данные"
-        )
+        quote = get_pair_quote(rates, from_currency, to_currency)
+        if is_rate_stale(quote):
+            raise ApiRequestError(
+                f"Курс {from_currency}->{to_currency} устарел: источник не обновил данные"
+            )
+
     print(
         f"Курс {from_currency}->{to_currency}: {quote['rate']} "
         f"(обновлено: {quote['updated_at']}, источник: {quote['source']})"
@@ -303,14 +286,9 @@ def deposit(user: User | None, amount: float) -> None:
     """Пополняет USD-кошелёк для симуляции торговли."""
     _, portfolios, portfolio = _get_portfolio(user)
 
-    validate_amount(amount)
-
     wallets = portfolio["wallets"]
     usd_wallet = _wallet(wallets, "USD")
     usd_wallet.deposit(amount)
-
-    if not math.isfinite(usd_wallet.balance):
-        raise ValueError("Баланс после пополнения должен быть конечным числом")
 
     wallets.setdefault("USD", {"currency_code": "USD"})["balance"] = usd_wallet.balance
 
@@ -319,8 +297,7 @@ def deposit(user: User | None, amount: float) -> None:
     print(f"Зачислено: {amount:.2f} USD. Баланс: {usd_wallet.balance:.2f} USD")
 
 
-def update_rates(source: str | None = None) -> dict:
-    """Запускает обновление выбранных источников и выводит результат."""
+def _run_rates_update(source: str | None = None) -> dict:
     config = ParserConfig()
 
     client_types = {
@@ -337,7 +314,12 @@ def update_rates(source: str | None = None) -> dict:
         config, [client(config) for client in selected], RatesStorage(config)
     )
 
-    result = updater.run_update()
+    return updater.run_update()
+
+
+def update_rates(source: str | None = None) -> dict:
+    """Запускает обновление выбранных источников и выводит результат."""
+    result = _run_rates_update(source)
 
     print(
         f"Обновлено курсов: {result['updated_count']}. "
