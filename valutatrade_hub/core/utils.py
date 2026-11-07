@@ -5,34 +5,44 @@ from pathlib import Path
 
 from valutatrade_hub.core.currencies import get_currency
 from valutatrade_hub.core.exceptions import ApiRequestError
-from valutatrade_hub.core.models import CURRENCIES
 from valutatrade_hub.infra.settings import SettingsLoader
+
+MOCK_USD_RATES = {
+    "USD": 1.0,
+    "EUR": 1.1,
+    "RUB": 0.01,
+    "BTC": 1000.0,
+    "ETH": 2000.0,
+}
 
 
 def get_mock_rates() -> dict:
+    """Создаёт мок котировки к USD без запросов к API."""
     timestamp = datetime.now(UTC).isoformat()
     return {
         "base_currency": "USD",
         "last_refresh": timestamp,
         "pairs": {
             f"{code}_USD": {
-                "rate": value / CURRENCIES["USD"],
+                "rate": value / MOCK_USD_RATES["USD"],
                 "updated_at": timestamp,
                 "source": "Mock",
             }
-            for code, value in CURRENCIES.items()
+            for code, value in MOCK_USD_RATES.items()
             if code != "USD"
         },
     }
 
 
 def load_json(filename: str):
+    """Читает JSON из каталога данных."""
     data_dir = SettingsLoader().get("data_dir")
     with open(f"{data_dir}/{filename}", encoding="utf-8") as file:
         return json.load(file)
 
 
 def save_json(filename: str, records: list[dict] | dict) -> None:
+    """Безопасно сохраняет JSON."""
     data_dir = SettingsLoader().get("data_dir")
     path = Path(data_dir) / filename
     temporary_path = path.with_name(path.name + ".tmp")
@@ -47,6 +57,7 @@ def save_json(filename: str, records: list[dict] | dict) -> None:
 
 
 def validate_amount(amount: float) -> None:
+    """Валидатор суммы."""
     if (
         isinstance(amount, bool)
         or not isinstance(amount, (int, float))
@@ -57,6 +68,7 @@ def validate_amount(amount: float) -> None:
 
 
 def get_pair_quote(rates: dict, from_code: str, to_code: str) -> dict:
+    """Возвращает котировку с метаданными."""
     if from_code == to_code:
         return {
             "rate": 1.0,
@@ -125,6 +137,7 @@ def get_pair_quote(rates: dict, from_code: str, to_code: str) -> dict:
 
 
 def is_rate_stale(quote: dict) -> bool:
+    """Проверяет возраст котировки."""
     ttl = SettingsLoader().get("rates_ttl_seconds")
 
     updated_at = datetime.fromisoformat(quote["updated_at"])
@@ -135,6 +148,7 @@ def is_rate_stale(quote: dict) -> bool:
 
 
 def get_pair_rate(rates: dict, from_code: str, to_code: str) -> float:
+    """Проверяет коды валют и возвращает числовое значение курса."""
     get_currency(from_code)
     get_currency(to_code)
 

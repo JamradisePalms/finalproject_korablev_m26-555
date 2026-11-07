@@ -32,6 +32,7 @@ from valutatrade_hub.parser_service.updater import RatesUpdater
 
 
 def register(username: str, password: str) -> None:
+    """Регистрирует пользователя и создаёт пустой портфель."""
     users = load_json("users.json")
 
     if any(user["username"] == username for user in users):
@@ -79,6 +80,7 @@ def register(username: str, password: str) -> None:
 
 
 def login(username: str, password: str) -> str | int:
+    """Проверяет пароль и возвращает идентификатор пользователя."""
     users = load_json("users.json")
 
     user = next((item for item in users if item["username"] == username), None)
@@ -98,6 +100,7 @@ def login(username: str, password: str) -> str | int:
 
 
 def show_portfolio(user_id: str | None, base_currency: str | None = None) -> None:
+    """Выводит кошельки и общую стоимость в выбранной валюте."""
     user, _, portfolio = _get_portfolio(user_id)
 
     if base_currency is None:
@@ -151,8 +154,17 @@ def _trade_context(
 
     validate_amount(amount)
 
+    get_currency(currency_code)
     rates = load_json("rates.json")
-    rate = get_pair_rate(rates, currency_code, "USD")
+
+    quote = get_pair_quote(rates, currency_code, "USD")
+
+    if is_rate_stale(quote):
+        raise ApiRequestError(
+            f"Курс {currency_code}->USD устарел. Выполните update-rates перед сделкой"
+        )
+
+    rate = quote["rate"]
 
     value = amount * rate
     if not math.isfinite(value) or value <= 0:
@@ -172,6 +184,7 @@ def _wallet(wallets: dict, currency_code: str) -> Wallet:
 
 @log_action(verbose=True)
 def buy(user_id: str | None, currency_code: str, amount: float) -> dict:
+    """Покупает валюту за USD по свежей котировке из кеша."""
     portfolios, portfolio, rate, cost = _trade_context(user_id, currency_code, amount)
 
     wallets = portfolio["wallets"]
@@ -216,6 +229,7 @@ def buy(user_id: str | None, currency_code: str, amount: float) -> dict:
 
 @log_action(verbose=True)
 def sell(user_id: str | None, currency_code: str, amount: float) -> dict:
+    """Продаёт валюту за USD по свежей котировке из кеша."""
     portfolios, portfolio, rate, proceeds = _trade_context(
         user_id, currency_code, amount
     )
@@ -259,6 +273,7 @@ def sell(user_id: str | None, currency_code: str, amount: float) -> dict:
 
 
 def get_rate(from_currency: str, to_currency: str) -> dict:
+    """Возвращает курс и время; при необходимости обновляет котировки."""
     get_currency(from_currency)
     get_currency(to_currency)
 
@@ -305,6 +320,7 @@ def get_rate(from_currency: str, to_currency: str) -> dict:
 
 
 def deposit(user_id: str | None, amount: float) -> None:
+    """Пополняет USD-кошелёк для симуляции торговли."""
     _, portfolios, portfolio = _get_portfolio(user_id)
 
     validate_amount(amount)
@@ -324,6 +340,7 @@ def deposit(user_id: str | None, amount: float) -> None:
 
 
 def update_rates(source: str | None = None) -> dict:
+    """Запускает обновление выбранных источников и выводит результат."""
     config = ParserConfig()
 
     client_types = {
@@ -360,52 +377,69 @@ def update_rates(source: str | None = None) -> dict:
 def show_rates(
     currency: str | None = None, top: int | None = None, base: str | None = None
 ) -> None:
+    """Выводит котировки из кеша с фильтрами и предупреждением о давности."""
     if top is not None and top <= 0:
         raise ValueError("--top должен быть положительным числом")
+
     try:
         rates = load_json("rates.json")
     except FileNotFoundError:
         rates = {"pairs": {}}
+
     if not isinstance(rates, dict) or not isinstance(rates.get("pairs"), dict):
         raise TypeError("Некорректный формат кеша курсов: ожидается словарь pairs")
+
     pairs = rates["pairs"]
     if not pairs:
         print(
             "Локальный кеш курсов пуст. Выполните 'update-rates', чтобы загрузить данные."
         )
         return
+
     codes = {code for pair in pairs for code in pair.split("_")}
+
     base = base or SettingsLoader().get("base_currency")
     if base not in codes:
         raise ValueError(f"Курс для '{base}' не найден в кеше")
+
     if currency is not None and currency not in codes:
         raise ValueError(f"Курс для '{currency}' не найден в кеше")
 
     config = ParserConfig()
     rows = []
+
     for code in codes:
         if currency is not None and code != currency:
             continue
+
         if top is not None and code not in config.CRYPTO_CURRENCIES:
             continue
+
         if code == base and currency is None:
             continue
+
         quote = get_pair_quote(rates, code, base)
         rows.append((code, quote))
+
     rows.sort(
         key=lambda row: row[1]["rate"] if top is not None else row[0],
         reverse=top is not None,
     )
+
     if top is not None:
         rows = rows[:top]
+
     if not rows:
         print("Курсы по заданным фильтрам не найдены в кеше.")
         return
+
     print(
         f"Курсы из кеша (последнее обновление: {rates.get('last_refresh', 'неизвестно')}):"
     )
+
     if any(is_rate_stale(quote) for _, quote in rows):
         print("Внимание: есть устаревшие курсы. Выполните update-rates.")
+
     table = PrettyTable(["Пара", "Курс", "Обновлено", "Источник"])
     table.align = "l"
     for code, quote in rows:
@@ -417,4 +451,5 @@ def show_rates(
                 quote["source"],
             ]
         )
+
     print(table)

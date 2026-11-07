@@ -37,7 +37,6 @@ class Currency(ABC):
     def get_display_info(self) -> str:
         pass
 
-
 class FiatCurrency(Currency):
     def __init__(self, name: str, code: str, issuing_country: str):
         super().__init__(name, code)
@@ -55,6 +54,7 @@ class CryptoCurrency(Currency):
 
     def get_display_info(self) -> str:
         market_cap = f"{self.market_cap:.3g}".replace("e+", "e")
+
         return (
             f"[CRYPTO] {self.code} — {self.name} "
             f"(Algo: {self.algorithm}, MCAP: {market_cap})"

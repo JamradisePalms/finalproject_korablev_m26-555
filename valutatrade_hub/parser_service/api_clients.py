@@ -28,6 +28,7 @@ class BaseApiClient(ABC):
         pass
 
     def get_json(self, url: str, params: dict | None = None) -> dict:
+        """Выполняет GET-запрос."""
         service = type(self).__name__
 
         try:
@@ -61,6 +62,7 @@ class BaseApiClient(ABC):
 class CoinGeckoClient(BaseApiClient):
 
     def fetch_rates(self) -> dict:
+        """Возвращает котировки из CoinGecko."""
         base = self.config.BASE_FIAT_CURRENCY
 
         try:
@@ -96,6 +98,7 @@ class CoinGeckoClient(BaseApiClient):
 class ExchangeRateApiClient(BaseApiClient):
 
     def fetch_rates(self) -> dict:
+        """Возвращает котировки из ExchangeRateApiClient."""
         key = self.config.EXCHANGE_RATE_API_KEY
 
         if not key:
